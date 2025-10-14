@@ -284,6 +284,12 @@ if __name__ == "__main__":
         {"slug": "sma", "params": {"window": 50, "column": "close"}, "name": "SMA(50)"},
         {"slug": "ema", "params": {"window": 20, "column": "close"}, "name": "EMA(20)"},
         {"slug": "ema", "params": {"window": 50, "column": "close"}, "name": "EMA(50)"},
+        {"slug": "wma", "params": {"window": 20, "column": "close"}, "name": "WMA(20)"},
+        {"slug": "wma", "params": {"window": 50, "column": "close"}, "name": "WMA(50)"},
+        {"slug": "hma", "params": {"window": 20, "column": "close"}, "name": "HMA(20)"},
+        {"slug": "hma", "params": {"window": 50, "column": "close"}, "name": "HMA(50)"},
+        {"slug": "rma", "params": {"window": 20, "column": "close"}, "name": "RMA(20)"},
+        {"slug": "rma", "params": {"window": 50, "column": "close"}, "name": "RMA(50)"},
     ]
 
     # Load your price data
@@ -292,12 +298,12 @@ if __name__ == "__main__":
     # Add indicators as columns
     df, indicator_cols = add_indicator_columns(df, indicators)
 
-print(df.head())
-print("Indicator columns added:", indicator_cols)
+    print(df.head())
+    print("Indicator columns added:", indicator_cols)
 
-plot_candlestick_chart(
-    df,
-    "AAPL",
-    "aapl_candles_with_indicators.html",
-    indicator_cols=indicator_cols,   # use the ones actually added
-)
+    plot_candlestick_chart(
+        df,
+        "AAPL",
+        "aapl_candles_with_indicators.html",
+        indicator_cols=indicator_cols,   # use the ones actually added
+    )
