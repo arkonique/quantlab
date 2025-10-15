@@ -14,6 +14,8 @@ A cli example is as follows:
     quantlab$ tAAPL
     quantlab$ i sma:20
     quantlab$ i ema:50
-    quantlab$ chart --out "aapl_candles_with_indicators.html"
+    quantlab$ output --chart "aapl_candles_with_indicators.html"
+    quantlab$ output --dataframe "aapl_data_with_indicators.csv"
+    quantlab$ exit
 ```
 

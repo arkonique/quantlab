@@ -58,6 +58,54 @@ def _save_chart(state, file_path: str) -> None:
         theme="plotly_dark",
     )
 
+# --- custom CSS injection for dataframe->HTML ---
+# Fixed small typo: 'Motnserrat' -> 'Montserrat'
+_DATAFRAME_EMBED_CSS = """<style>
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800&display=swap');
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background-color: #ccd7e8;
+}
+
+table {
+  border-collapse: collapse;
+  background-color: white;
+  overflow: hidden;
+  width: 500px;
+  border-radius: 10px;
+}
+
+th, td {
+  font-family: 'Montserrat', sans-serif;
+  text-align: left;
+  font-size: 12px;
+  padding: 10px;
+}
+
+th {
+  background-color: #7691ab;
+  color: white;
+}
+</style>
+"""
+
+def _wrap_table_html_with_style(table_html: str, title: str = "Dataframe Export") -> str:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+{_DATAFRAME_EMBED_CSS}
+</head>
+<body>
+{table_html}
+</body>
+</html>
+"""
+
 def _save_dataframe(state, file_path: str) -> None:
     import pandas as pd
     out = Path(file_path)
@@ -86,11 +134,14 @@ def _save_dataframe(state, file_path: str) -> None:
         df.to_json(out, orient="records")
     elif ext in ("ndjson", "jsonl"):
         df.to_json(out, orient="records", lines=True)
-    elif ext in ("html",):
-        df.to_html(out, index=False)
+    elif ext in ("html", "htm"):
+        # Build a full HTML document and inject a <style> in <head>, then the table in <body>
+        table_html = df.to_html(index=False)
+        doc_html = _wrap_table_html_with_style(table_html, title=f"{state.ticker} dataframe")
+        out.write_text(doc_html, encoding="utf-8")
     elif ext in ("md", "markdown"):
         try:
-            md = df.to_markdown(index=False)
+            md = df.to_markdown(index=False)  # requires tabulate
         except Exception as e:
             raise RuntimeError(f"Markdown export requires 'tabulate'. pip install tabulate. ({e})")
         out.write_text(md, encoding="utf-8")
@@ -113,7 +164,7 @@ class Output(Command):
         "Usage:\n"
         "  output --chart FILE     | output chart FILE      (save chart: html/png/svg/pdf)\n"
         "  output --dataframe FILE | output dataframe FILE  (save df: csv/xlsx/html/md/json/...)\n"
-        "  output FILE             (infers by extension: .html/.png/.svg/.pdf -> chart; otherwise dataframe)"
+        "  output FILE             (infers by extension: .html/.htm/.png/.svg/.pdf -> chart; otherwise dataframe)"
     )
 
     def run(self, args: List[str], state) -> None:
