@@ -8,12 +8,50 @@ from ....registry import Command
 _ALLOWED_INTERVALS = {
     "1min", "5min", "15min", "30min", "45min",
     "1h", "2h", "4h", "8h",
-    "1day",
-    "1week",
-    "1month",
+    "1day", "1week", "1month",
 }
 
 _FAKE_RE = re.compile(r"^FAKE\d*$", re.IGNORECASE)
+
+# Accept ONLY hyphenated date/time:
+#  - YYYY-MM-DD
+#  - YYYY-MM-DD-HH
+#  - YYYY-MM-DD-HH-MM
+#  - YYYY-MM-DD-HH-MM-SS
+_DATE_HYPHEN_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})(?:-(\d{2})(?:-(\d{2})(?:-(\d{2}))?)?)?$"
+)
+
+def _looks_like_date(s: str) -> bool:
+    s = s.strip()
+    # strictly forbid ':' inside date tokens
+    if ":" in s or " " in s or "T" in s:
+        return False
+    return bool(_DATE_HYPHEN_RE.match(s))
+
+def _normalize_date_token(s: str) -> str:
+    """
+    Normalize hyphenated date tokens to:
+      - 'YYYY-MM-DD'           (if only date)
+      - 'YYYY-MM-DD HH:MM:SS'  (if time present)
+    ONLY accepts:
+      'YYYY-MM-DD'
+      'YYYY-MM-DD-HH'
+      'YYYY-MM-DD-HH-MM'
+      'YYYY-MM-DD-HH-MM-SS'
+    """
+    s = s.strip()
+    m = _DATE_HYPHEN_RE.match(s)
+    if not m:
+        raise ValueError(
+            f"Unrecognized date format: '{s}'. Use YYYY-MM-DD[-HH[-MM[-SS]]] (no colons)."
+        )
+    y, mo, d, hh, mm, ss = m.groups()
+    if hh is None:
+        return f"{y}-{mo}-{d}"
+    mm = mm or "00"
+    ss = ss or "00"
+    return f"{y}-{mo}-{d} {hh}:{mm}:{ss}"
 
 def _normalize_interval(user_text: str) -> str:
     s = (user_text or "").strip().lower().replace(" ", "")
@@ -55,15 +93,7 @@ def _normalize_interval(user_text: str) -> str:
         raise ValueError(f"Unsupported interval '{normalized}'. Allowed: {', '.join(sorted(_ALLOWED_INTERVALS))}")
     return normalized
 
-def _parse_real_ticker_args(arg_blob: str) -> Tuple[str, Optional[str], Optional[int]]:
-    parts = [p for p in arg_blob.split(":") if p != ""]
-    if not parts:
-        raise ValueError("Missing symbol.")
-    symbol = parts[0].upper()
-    interval = _normalize_interval(parts[1]) if len(parts) >= 2 and parts[1] else None
-    outputsize = int(parts[2]) if len(parts) >= 3 and parts[2] else None
-    return symbol, interval, outputsize
-
+# ---------- FAKE helpers ----------
 def _parse_fake_ticker_blob(arg_blob: str) -> Tuple[str, Optional[str]]:
     if ":" in arg_blob:
         sym, path = arg_blob.split(":", 1)
@@ -87,28 +117,11 @@ def _load_fake_df(file_path: str):
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Fake data missing required columns: {', '.join(missing)}")
-    df["datetime"] = pd.to_datetime(df["datetime"], errors="raise", utc=False)
+    df["datetime"] = __import__("pandas").to_datetime(df["datetime"], errors="raise", utc=False)
     df = df.sort_values("datetime").reset_index(drop=True)
     df = df.set_index("datetime")
     df.index.name = "datetime"
     return df
-
-def _apply_real_and_invalidate_if_needed(state, symbol: str, interval: Optional[str], outputsize: Optional[int]) -> None:
-    prev_sig = state.raw_sig
-    state.is_fake = False
-    state.fake_path = None
-    state.ticker = symbol
-    if interval:
-        state.interval = interval
-    if outputsize is not None:
-        state.outputsize = outputsize
-    new_sig = (state.ticker, state.interval, state.outputsize)
-    if prev_sig != new_sig:
-        state.raw_df = None
-        state.raw_sig = None
-    state.df = None
-    state.indicator_cols = []
-    state.derived_dirty = True
 
 def _prompt_for_fake_file() -> Optional[str]:
     while True:
@@ -130,21 +143,98 @@ def _apply_fake_with_file(state, symbol: str, file_path: str) -> None:
     state.ticker = symbol.upper()
     state.is_fake = True
     state.fake_path = str(Path(file_path))
+    # clear date-range/outsizing (irrelevant for FAKE)
+    state.range_start = None
+    state.range_end = None
     state.raw_df = df
-    state.raw_sig = (state.ticker, "FAKE", 0)  # special signature to avoid API fetch
+    state.raw_sig = ("FAKE", state.ticker, state.fake_path)
     state.df = None
     state.indicator_cols = []
     state.derived_dirty = True
+
+# ---------- REAL ticker parsing ----------
+def _parse_real_ticker_args(arg_blob: str):
+    """
+    Returns a dict with either:
+      {'mode': 'OUT', 'symbol': S, 'interval': I or None, 'outputsize': N or None}
+    or
+      {'mode': 'RANGE', 'symbol': S, 'start': A, 'end': B, 'interval': I or None}
+    where A/B are normalized to 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+    """
+    parts = [p for p in arg_blob.split(":") if p != ""]
+    if not parts:
+        raise ValueError("Missing symbol.")
+    symbol = parts[0].upper()
+
+    # RANGE forms (strict hyphenated date tokens):
+    #   S:START:END
+    #   S:START:END:INTERVAL
+    if len(parts) >= 3 and _looks_like_date(parts[1]) and _looks_like_date(parts[2]):
+        start = _normalize_date_token(parts[1])
+        end = _normalize_date_token(parts[2])
+        interval = None
+        if len(parts) >= 4 and parts[3]:
+            interval = _normalize_interval(parts[3])
+        return {"mode": "RANGE", "symbol": symbol, "start": start, "end": end, "interval": interval}
+
+    # OUT forms (legacy):
+    #   S:INTERVAL
+    #   S:INTERVAL:OUTPUTSIZE
+    interval = _normalize_interval(parts[1]) if len(parts) >= 2 and parts[1] else None
+    outputsize = int(parts[2]) if len(parts) >= 3 and parts[2] else None
+    return {"mode": "OUT", "symbol": symbol, "interval": interval, "outputsize": outputsize}
+
+def _apply_real_and_invalidate_if_needed(state, parsed: dict) -> None:
+    prev_sig = state.raw_sig
+    symbol = parsed["symbol"]
+    state.is_fake = False
+    state.fake_path = None
+    state.ticker = symbol
+
+    if parsed["mode"] == "RANGE":
+        if parsed.get("interval"):
+            state.interval = parsed["interval"]
+        state.range_start = parsed["start"]
+        state.range_end = parsed["end"]
+        new_sig = ("RANGE", state.ticker, state.interval, state.range_start, state.range_end)
+    else:
+        if parsed.get("interval"):
+            state.interval = parsed["interval"]
+        if parsed.get("outputsize") is not None:
+            state.outputsize = parsed["outputsize"]
+        state.range_start = None
+        state.range_end = None
+        new_sig = ("OUT", state.ticker, state.interval, state.outputsize)
+
+    if prev_sig != new_sig:
+        state.raw_df = None
+        state.raw_sig = None
+
+    state.df = None
+    state.indicator_cols = []
+    state.derived_dirty = True
+
+def _print_set_message(state):
+    if state.range_start and state.range_end:
+        print(f"Ticker set to {state.ticker} (range {state.range_start} → {state.range_end}, interval={state.interval})")
+    else:
+        print(f"Ticker set to {state.ticker} (interval={state.interval}, outputsize={state.outputsize})")
 
 class Ticker(Command):
     name = "ticker"
     aliases = ["t"]
     mode = "chart"
     help = (
-        "Set ticker (and optional interval/outputsize). Real: "
-        "ticker AAPL[:interval[:outputsize]] | t AAPL | tAAPL[:interval[:outputsize]]. "
+        "Set ticker.\n"
+        "Real (outputsize): ticker AAPL[:interval[:outputsize]] | t AAPL | tAAPL[:interval[:outputsize]]\n"
+        "Real (date range): ticker AAPL:START:END[:interval] | tAAPL:START:END[:interval]\n"
+        "  START/END formats (no colons allowed):\n"
+        "    - YYYY-MM-DD\n"
+        "    - YYYY-MM-DD-HH\n"
+        "    - YYYY-MM-DD-HH-MM\n"
+        "    - YYYY-MM-DD-HH-MM-SS\n"
         "FAKE data: ticker FAKE[:/path/file.csv] | t FAKE /path/file.xlsx | tFAKE:/path/file.csv | FAKE1, FAKE2, ...\n"
-        "If FAKE is provided without a file path, you'll be prompted to enter one."
+        "  If FAKE is provided without a file path, you'll be prompted to enter one."
     )
 
     def match_raw(self, line: str, state) -> bool:
@@ -157,6 +247,7 @@ class Ticker(Command):
         arg1 = m.group(1)
         rest = (m.group(2) or "").strip()
 
+        # FAKE branch
         if _FAKE_RE.match(arg1):
             symbol, path_from_blob = _parse_fake_ticker_blob(arg1)
             file_path = path_from_blob or (rest if rest else None)
@@ -180,10 +271,11 @@ class Ticker(Command):
                     print(f"Fake ticker error: {e}")
             return True
 
+        # REAL (compact blob)
         try:
-            symbol, interval, outputsize = _parse_real_ticker_args(arg1)
-            _apply_real_and_invalidate_if_needed(state, symbol, interval, outputsize)
-            print(f"Ticker set to {state.ticker} (interval={state.interval}, outputsize={state.outputsize})")
+            parsed = _parse_real_ticker_args(arg1)
+            _apply_real_and_invalidate_if_needed(state, parsed)
+            _print_set_message(state)
         except Exception as e:
             print(f"Ticker parse error: {e}")
         return True
@@ -196,13 +288,10 @@ class Ticker(Command):
             print(self.help)
             return
 
+        # FAKE route (space-variant)
         if _FAKE_RE.match(args[0]):
-            if len(args) == 1:
-                blob = args[0]
-                file_path = None
-            else:
-                blob = args[0]
-                file_path = args[1]
+            blob = args[0]
+            file_path = args[1] if len(args) > 1 else None
             try:
                 symbol, path_from_blob = _parse_fake_ticker_blob(blob)
             except Exception as e:
@@ -229,18 +318,31 @@ class Ticker(Command):
                     print(f"Fake ticker error: {e}")
             return
 
+        # REAL route (space-separated variants):
+        # - SYMBOL INTERVAL OUTPUTSIZE
+        # - SYMBOL START END [INTERVAL]   (START/END must be hyphenated date/time; no colons)
         if len(args) == 1:
             blob = args[0]
         else:
-            blob = args[0]
-            if len(args) >= 2 and args[1]:
-                blob += f":{args[1]}"
-            if len(args) >= 3 and args[2]:
-                blob += f":{args[2]}"
+            if len(args) >= 3 and _looks_like_date(args[1]) and _looks_like_date(args[2]):
+                # normalize START/END then stitch colon form
+                start_norm = _normalize_date_token(args[1])
+                end_norm = _normalize_date_token(args[2])
+                if len(args) >= 4:
+                    blob = f"{args[0]}:{start_norm.replace(' ', ' ')}:{end_norm.replace(' ', ' ')}:{args[3]}"
+                else:
+                    blob = f"{args[0]}:{start_norm.replace(' ', ' ')}:{end_norm.replace(' ', ' ')}"
+            else:
+                # treat as OUT mode (interval/outputsize)
+                blob = args[0]
+                if len(args) >= 2 and args[1]:
+                    blob += f":{args[1]}"
+                if len(args) >= 3 and args[2]:
+                    blob += f":{args[2]}"
 
         try:
-            symbol, interval, outputsize = _parse_real_ticker_args(blob)
-            _apply_real_and_invalidate_if_needed(state, symbol, interval, outputsize)
-            print(f"Ticker set to {state.ticker} (interval={state.interval}, outputsize={state.outputsize})")
+            parsed = _parse_real_ticker_args(blob)
+            _apply_real_and_invalidate_if_needed(state, parsed)
+            _print_set_message(state)
         except Exception as e:
             print(f"Ticker parse error: {e}")

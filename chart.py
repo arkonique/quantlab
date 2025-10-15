@@ -133,6 +133,153 @@ def load_chart_data(ticker, interval="1min", outputsize=30):
         raise ValueError(f"Error fetching data: {data.get('message', 'Unknown error')}")
     
 
+# Map TwelveData-style interval strings to pandas Timedelta for validation
+_INTERVAL_TO_DELTA = {
+    "1min":  pd.Timedelta(minutes=1),
+    "5min":  pd.Timedelta(minutes=5),
+    "15min": pd.Timedelta(minutes=15),
+    "30min": pd.Timedelta(minutes=30),
+    "45min": pd.Timedelta(minutes=45),
+    "1h":    pd.Timedelta(hours=1),
+    "2h":    pd.Timedelta(hours=2),
+    "4h":    pd.Timedelta(hours=4),
+    "8h":    pd.Timedelta(hours=8),
+    "1day":  pd.Timedelta(days=1),
+    "1week": pd.Timedelta(weeks=1),
+    "1month": pd.Timedelta(days=28),  # lower bound sanity check (months vary)
+}
+
+_SUPPORTED_INTERVALS = set(_INTERVAL_TO_DELTA.keys())
+
+def _parse_dt_any(x) -> pd.Timestamp:
+    """
+    Accepts:
+      - str in 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+      - datetime / pandas Timestamp (naive or tz-aware)
+    Returns a pandas.Timestamp (tz-naive, second precision).
+    """
+    if x is None:
+        raise ValueError("start_date and end_date must be provided.")
+    ts = pd.to_datetime(x)
+    # If tz-aware, convert to UTC then drop tz (TwelveData expects local-like strings)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC") if hasattr(ts, "tz_convert") else ts.tz_localize(None)
+        ts = ts.tz_localize(None)
+    # Round down to seconds for stable string formatting
+    return ts.floor("S")
+
+def _fmt_td_api(ts: pd.Timestamp) -> str:
+    # Twelve Data accepts 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+    # Always send full resolution to seconds.
+    return ts.strftime("%Y-%m-%d %H:%M:%S")
+
+def load_duration_data(
+    ticker: str,
+    interval: str = "1min",
+    start_date=None,
+    end_date=None,
+):
+    """
+    Fetch OHLCV for `ticker` between [start_date, end_date] at `interval`.
+
+    Args
+    ----
+    ticker : str
+    interval : str
+        One of: 1min, 5min, 15min, 30min, 45min, 1h, 2h, 4h, 8h, 1day, 1week, 1month
+    start_date, end_date :
+        str ('YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'), or datetime-like.
+
+    Returns
+    -------
+    pd.DataFrame indexed by datetime (ascending) with float columns:
+    open, high, low, close, volume.
+    """
+    # --- Input validation ---
+    interval = str(interval).lower().strip()
+    if interval not in _SUPPORTED_INTERVALS:
+        raise ValueError(
+            f"Unsupported interval '{interval}'. "
+            f"Supported: {sorted(_SUPPORTED_INTERVALS)}"
+        )
+
+    start_ts = _parse_dt_any(start_date)
+    end_ts   = _parse_dt_any(end_date)
+
+    if end_ts <= start_ts:
+        raise ValueError(f"end_date ({end_ts}) must be after start_date ({start_ts}).")
+
+    # Check that the requested span is at least one bar long
+    min_span = _INTERVAL_TO_DELTA[interval]
+    if (end_ts - start_ts) < min_span:
+        raise ValueError(
+            f"Requested duration {end_ts - start_ts} is shorter than one '{interval}' bar "
+            f"({min_span})."
+        )
+
+    # --- Build API request ---
+    base_url = "https://api.twelvedata.com/time_series"
+    params = {
+        "symbol": ticker,
+        "interval": interval,
+        "start_date": _fmt_td_api(start_ts),
+        "end_date": _fmt_td_api(end_ts),
+        "apikey": TWELVE_DATA_API_KEY,
+        # You can add "timezone": "America/Toronto" or similar if you prefer.
+    }
+
+    resp = requests.get(base_url, params=params, timeout=30)
+    # Network / HTTP sanity
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        raise RuntimeError(f"TwelveData HTTP error {resp.status_code}: {resp.text}") from e
+
+    data = resp.json()
+
+    # TwelveData sometimes nests the payload; handle both common shapes.
+    # Expected success shape: {"meta": {...}, "values": [ { "datetime": "...", "open": "...", ... }, ... ] }
+    if not isinstance(data, dict):
+        raise RuntimeError("Unexpected TwelveData response shape (not a JSON object).")
+
+    if "status" in data and data.get("status") == "error":
+        # Common error payloads: {"status":"error","message":"..."}
+        raise ValueError(f"TwelveData error: {data.get('message','Unknown error')}")
+
+    if "values" not in data or not isinstance(data["values"], list) or len(data["values"]) == 0:
+        # Some errors are embedded differently:
+        msg = data.get("message") or data.get("note") or "No 'values' returned."
+        raise ValueError(f"Error fetching data: {msg}")
+
+    df = pd.DataFrame(data["values"])
+
+    # Standardize columns & dtypes
+    if "datetime" not in df.columns:
+        raise RuntimeError("TwelveData response missing 'datetime' in values.")
+
+    # Coerce datetimes and numeric columns
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.set_index("datetime").sort_index()  # ascending
+
+    # The API returns strings for numbers; coerce safely
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            # Some intervals may omit 'volume'; create if absent
+            if col == "volume":
+                df[col] = pd.NA
+
+    # Clip to the exact requested window (server-side may include edges)
+    df = df.loc[(df.index >= start_ts) & (df.index <= end_ts)]
+
+    # Ensure strictly increasing index and float dtype where possible
+    df = df.astype(
+        {c: "float64" for c in ("open", "high", "low", "close") if c in df.columns}
+    )
+
+    return df
+
 
 def plot_candlestick_chart(df: pd.DataFrame,
                            ticker: str,

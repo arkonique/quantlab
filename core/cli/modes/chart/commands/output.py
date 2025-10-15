@@ -5,41 +5,72 @@ from ....registry import Command
 
 # ===== helpers =====
 
-def _current_sig(state):
-    if not state.ticker:
-        raise RuntimeError("Ticker not set.")
-    return (state.ticker, state.interval, state.outputsize)
-
 def _ensure_loaded(state) -> None:
     """
-    - REAL: fetch raw once per (ticker, interval, outputsize).
+    - REAL + OUT mode: fetch raw once per (ticker, interval, outputsize) via load_chart_data
+    - REAL + RANGE mode: fetch raw once per (ticker, interval, start, end) via load_duration_data
     - FAKE: never call API; raw_df is set by ticker command.
     - DERIVED: rebuild from raw + indicators only when needed.
     """
     if state.mode != "chart":
         raise RuntimeError("Not in chart mode.")
     if not state.ticker:
-        raise RuntimeError("Ticker not set. Use: t SYMBOL or ticker SYMBOL[:interval[:outputsize]].")
+        raise RuntimeError("Ticker not set. Use: t SYMBOL or ticker SYMBOL …")
 
+    # FAKE branch
     if state.is_fake:
         if state.raw_df is None:
             src = state.fake_path or "(no file provided)"
             raise RuntimeError(f"FAKE ticker has no data loaded. Provide a file. Current: {src}")
+        # derived rebuild
+        if state.df is None or state.derived_dirty:
+            from chart import add_indicator_columns
+            base = state.raw_df.copy(deep=True)
+            state.df, state.indicator_cols = add_indicator_columns(base, state.indicators)
+            state.derived_dirty = False
+        return
+
+    # REAL branches
+    # decide signature + fetcher based on range presence
+    if state.range_start and state.range_end:
+        new_sig = ("RANGE", state.ticker, state.interval, state.range_start, state.range_end)
+        if state.raw_df is None or state.raw_sig != new_sig:
+            try:
+                from core.indicators import discover_all
+                discover_all()
+            except Exception:
+                pass
+            from chart import load_duration_data
+            state.raw_df = load_duration_data(
+                state.ticker,
+                interval=state.interval,
+                start_date=state.range_start,
+                end_date=state.range_end,
+            )
+            state.raw_sig = new_sig
+            state.df = None
+            state.indicator_cols = []
+            state.derived_dirty = True
     else:
-        sig = _current_sig(state)
-        if state.raw_df is None or state.raw_sig != sig:
+        new_sig = ("OUT", state.ticker, state.interval, state.outputsize)
+        if state.raw_df is None or state.raw_sig != new_sig:
             try:
                 from core.indicators import discover_all
                 discover_all()
             except Exception:
                 pass
             from chart import load_chart_data
-            state.raw_df = load_chart_data(state.ticker, interval=state.interval, outputsize=state.outputsize)
-            state.raw_sig = sig
+            state.raw_df = load_chart_data(
+                state.ticker,
+                interval=state.interval,
+                outputsize=state.outputsize,
+            )
+            state.raw_sig = new_sig
             state.df = None
             state.indicator_cols = []
             state.derived_dirty = True
 
+    # DERIVED rebuild (only when flagged)
     if state.df is None or state.derived_dirty:
         from chart import add_indicator_columns
         base = state.raw_df.copy(deep=True)  # avoid mutating raw
@@ -48,8 +79,7 @@ def _ensure_loaded(state) -> None:
 
 def _save_chart(state, file_path: str) -> None:
     from chart import plot_candlestick_chart
-    out = Path(file_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(file_path); out.parent.mkdir(parents=True, exist_ok=True)
     plot_candlestick_chart(
         state.df,
         state.ticker,
@@ -58,8 +88,7 @@ def _save_chart(state, file_path: str) -> None:
         theme="plotly_dark",
     )
 
-# --- custom CSS injection for dataframe->HTML ---
-# Fixed small typo: 'Motnserrat' -> 'Montserrat'
+# --- dataframe -> HTML CSS injection (unchanged from your last request) ---
 _DATAFRAME_EMBED_CSS = """<style>
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800&display=swap');
 body {
@@ -69,7 +98,6 @@ body {
   min-height: 100vh;
   background-color: #ccd7e8;
 }
-
 table {
   border-collapse: collapse;
   background-color: white;
@@ -77,14 +105,12 @@ table {
   width: 500px;
   border-radius: 10px;
 }
-
 th, td {
   font-family: 'Montserrat', sans-serif;
   text-align: left;
   font-size: 12px;
   padding: 10px;
 }
-
 th {
   background-color: #7691ab;
   color: white;
@@ -108,8 +134,7 @@ def _wrap_table_html_with_style(table_html: str, title: str = "Dataframe Export"
 
 def _save_dataframe(state, file_path: str) -> None:
     import pandas as pd
-    out = Path(file_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(file_path); out.parent.mkdir(parents=True, exist_ok=True)
     ext = out.suffix.lower().lstrip(".")
     df = state.df
 
@@ -135,7 +160,6 @@ def _save_dataframe(state, file_path: str) -> None:
     elif ext in ("ndjson", "jsonl"):
         df.to_json(out, orient="records", lines=True)
     elif ext in ("html", "htm"):
-        # Build a full HTML document and inject a <style> in <head>, then the table in <body>
         table_html = df.to_html(index=False)
         doc_html = _wrap_table_html_with_style(table_html, title=f"{state.ticker} dataframe")
         out.write_text(doc_html, encoding="utf-8")
@@ -172,16 +196,13 @@ class Output(Command):
             print("Error: set mode to 'chart' first (use: mode chart | mc).")
             return
         if not args:
-            print(self.help)
-            return
+            print(self.help); return
 
-        intent = None
-        file_path = None
         a0 = args[0].lower()
         if a0 in ("--chart", "chart"):
-            intent = "chart"; file_path = args[1] if len(args) > 1 else None
+            intent, file_path = "chart", (args[1] if len(args) > 1 else None)
         elif a0 in ("--dataframe", "dataframe"):
-            intent = "dataframe"; file_path = args[1] if len(args) > 1 else None
+            intent, file_path = "dataframe", (args[1] if len(args) > 1 else None)
         else:
             file_path = args[0]
             ext = Path(file_path).suffix.lower()
@@ -213,8 +234,7 @@ class Oc(Command):
     mode = "chart"
     help = "Shortcut: save chart. Usage: oc FILE"
     def run(self, args: List[str], state) -> None:
-        if not args:
-            print("Usage: oc FILE"); return
+        if not args: print("Usage: oc FILE"); return
         Output().run(["--chart", args[0]], state)
 
 class Od(Command):
@@ -222,6 +242,5 @@ class Od(Command):
     mode = "chart"
     help = "Shortcut: save dataframe. Usage: od FILE"
     def run(self, args: List[str], state) -> None:
-        if not args:
-            print("Usage: od FILE"); return
+        if not args: print("Usage: od FILE"); return
         Output().run(["--dataframe", args[0]], state)
