@@ -216,14 +216,15 @@ def plot_candlestick_chart(
     df, ticker, filename, indicator_cols=None, theme="plotly_dark",
     connect_line=True, line_column="close",
 ):
+    x_vals = pd.to_datetime(df.index).strftime("%Y-%m-%d %H:%M:%S")
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="OHLC"
+        x=x_vals, open=df["open"], high=df["high"], low=df["low"], close=df["close"], name="OHLC"
     ))
 
     if connect_line and line_column in df.columns:
         fig.add_trace(go.Scatter(
-            x=df.index, y=df[line_column], mode="lines",
+            x=x_vals, y=df[line_column], mode="lines",
             name=f"{line_column.capitalize()} (connect)",
             line=dict(width=1, dash="dot"), hoverinfo="skip",
             connectgaps=False,
@@ -234,7 +235,7 @@ def plot_candlestick_chart(
         for col in indicator_cols:
             if col in df.columns:
                 fig.add_trace(go.Scatter(
-                    x=df.index, y=df[col], mode="lines", name=col, line=dict(width=2),
+                    x=x_vals, y=df[col], mode="lines", name=col, line=dict(width=2),
                     connectgaps=False,
                 ))
 
@@ -261,17 +262,27 @@ def plot_candlestick_chart(
         ),
         hovermode="x unified",
     )
-    fig.write_html(filename)
 
-    # remove margins from the saved HTML file body
-    with open(filename, "r", encoding="utf-8") as f:
-        html = f.read()
+    # if filename is .html or .htm, save as HTML
+    if filename.endswith((".html", ".htm")):
+        fig.write_html(filename)
 
-    # Remove the margins from the HTML body
-    html = html.replace('<body>', '<body style="margin:0">')
+        # remove margins from the saved HTML file body
+        with open(filename, "r", encoding="utf-8") as f:
+            html = f.read()
 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(html)
+        # Remove the margins from the HTML body
+        html = html.replace('<body>', '<body style="margin:0">')
+
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(html)
+    else:
+        # otherwise save as the indicated image format (png, jpg, svg, pdf)
+        # set image resolution to 4k but increase font size for better readability and increase legend size
+        fig.update_layout(
+            font=dict(size=30),  # increase font size for better readability
+        )
+        fig.write_image(filename, width=3840, height=2160, scale=1)
 
 # Example usage:
 if __name__ == "__main__":
@@ -293,7 +304,7 @@ if __name__ == "__main__":
     ]
 
     # Load your price data
-    df = load_chart_data("AAPL", interval="1day", outputsize=252)
+    df = load_chart_data("AAPL", interval="2h", outputsize=252)
 
     # Add indicators as columns
     df, indicator_cols = add_indicator_columns(df, indicators)
@@ -304,6 +315,6 @@ if __name__ == "__main__":
     plot_candlestick_chart(
         df,
         "AAPL",
-        "aapl_candles_with_indicators.html",
+        "aapl_candles_with_indicators22.html",
         indicator_cols=indicator_cols,   # use the ones actually added
     )

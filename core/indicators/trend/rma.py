@@ -13,6 +13,7 @@ class RMA(Indicator):
     """
     category = "trend"
     slug = "rma"
+    name = "Wilder's Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as a line
 
     def __init__(

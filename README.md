@@ -1,5 +1,4 @@
 # QuantLab: A Research Environment for Quantitative Trading Strategies
-# =============================================================================
 
 QuantLab is an open-source Python project designed to facilitate the development, testing, and analysis of quantitative trading strategies. It provides a structured environment for loading market data, applying technical indicators, and visualizing results through interactive charts.
 

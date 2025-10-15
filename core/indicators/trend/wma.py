@@ -6,6 +6,7 @@ import numpy as np
 class WMA(Indicator):
     category = "trend"
     slug = "wma"
+    name = "Weighted Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as a line
 
     def __init__(self, window: int = 20, column: str = "close"):

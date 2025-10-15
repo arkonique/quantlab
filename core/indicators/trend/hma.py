@@ -6,6 +6,7 @@ import numpy as np
 class HMA(Indicator):
     category = "trend"
     slug = "hma"
+    name = "Hull Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as a line
 
     def __init__(self, window: int = 20, column: str = "close"):

@@ -5,6 +5,7 @@ import pandas as pd
 class EMA(Indicator):
     category = "trend"
     slug = "ema"
+    name = "Exponential Moving Average"
     indicator_type = IndicatorType.LINE  # this will be plotted as a line
 
     def __init__(self, window: int = 20, column: str = "close", adjust: bool = False):

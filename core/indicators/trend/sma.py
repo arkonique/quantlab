@@ -5,6 +5,7 @@ import pandas as pd
 class SMA(Indicator):
     category = "trend"
     slug = "sma"
+    name = "Simple Moving Average"
     indicator_type = IndicatorType.LINE  # exposes .type = "line"
 
     def __init__(self, window: int = 20, column: str = "close"):
