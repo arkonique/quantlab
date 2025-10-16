@@ -74,7 +74,7 @@ def _ensure_loaded(state) -> None:
     if state.df is None or state.derived_dirty:
         from chart import add_indicator_columns
         base = state.raw_df.copy(deep=True)  # avoid mutating raw
-        state.df, state.indicator_cols = add_indicator_columns(base, state.indicators)
+        state.df, state.indicator_cols, state.render_specs = add_indicator_columns(base, state.indicators)
         state.derived_dirty = False
 
 def _save_chart(state, file_path: str) -> None:
@@ -84,11 +84,11 @@ def _save_chart(state, file_path: str) -> None:
         state.df,
         state.ticker,
         str(out),
-        indicator_cols=state.indicator_cols,
+        indicator_specs=state.render_specs,
         theme="plotly_dark",
     )
 
-# --- dataframe -> HTML CSS injection (unchanged from your last request) ---
+# --- dataframe -> HTML CSS injection ---
 _DATAFRAME_EMBED_CSS = """<style>
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;800&display=swap');
 body {

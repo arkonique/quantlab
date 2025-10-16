@@ -31,7 +31,7 @@ class ATS(Indicator):
     category = "volatility"
     slug = "ats"
     name = "ATR Trailing Stops"
-    indicator_type = IndicatorType.BANDS
+    indicator_type = IndicatorType.LINE
 
     def __init__(
         self,

@@ -75,15 +75,19 @@ def _ensure_core_on_sys_path():
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-def _import_indicator_base() -> Optional[type]:
+def _import_indicator_base():
+    IndicatorBase = None
+    IndicatorType = None
     for mod in ("core.indicators.base", "core.indicators"):
         try:
             m = importlib.import_module(mod)
-            if hasattr(m, "Indicator"):
-                return getattr(m, "Indicator")
+            if hasattr(m, "Indicator") and IndicatorBase is None:
+                IndicatorBase = getattr(m, "Indicator")
+            if hasattr(m, "IndicatorType") and IndicatorType is None:
+                IndicatorType = getattr(m, "IndicatorType")
         except Exception:
             continue
-    return None
+    return IndicatorBase, IndicatorType
 
 def _walk_indicator_modules(debug: bool = False) -> List[str]:
     imported: List[str] = []
@@ -120,9 +124,48 @@ def _derive_category_from_module(mod_name: str) -> str:
         pass
     return ""
 
-def _collect_indicator_classes(debug: bool = False) -> List[Tuple[str, str, type]]:
+def _indicator_type_to_str(t, IndicatorTypeEnum=None) -> str:
+    """
+    Normalize indicator_type to a friendly string.
+    Accepts:
+      - Enum value (IndicatorType.*)  -> lowercased name
+      - str ("line", "band", ...)     -> lowercased
+      - anything else / missing       -> ""
+    """
+    if t is None:
+        return ""
+    # Enum from your base
+    try:
+        import enum
+        if isinstance(t, enum.Enum):
+            return str(t.name).lower()
+    except Exception:
+        pass
+    # Match specific enum class if provided
+    if IndicatorTypeEnum is not None:
+        try:
+            if isinstance(t, IndicatorTypeEnum):
+                return str(t.name).lower()
+        except Exception:
+            pass
+    # String fallback
+    if isinstance(t, str):
+        return t.strip().lower()
+    # Last resort: repr tail
+    s = str(t)
+    if "." in s:
+        s = s.split(".")[-1]
+    return s.strip().lower()
+
+def _collect_indicator_classes(debug: bool = False) -> List[Tuple[str, str, str, type]]:
+    """
+    Returns list of (slug, category, type_str, class).
+    - slug from class.slug (lowercased)
+    - category from class.category or derived from module path
+    - type_str from class.indicator_type (enum or str) normalized
+    """
     _ensure_core_on_sys_path()
-    IndicatorBase = _import_indicator_base()
+    IndicatorBase, IndicatorTypeEnum = _import_indicator_base()
     if IndicatorBase is None:
         if debug:
             print("[i list] Could not find core.indicators.base.Indicator")
@@ -140,7 +183,7 @@ def _collect_indicator_classes(debug: bool = False) -> List[Tuple[str, str, type
             seen.add(sub); out.append(sub); stack.extend(sub.__subclasses__())
         return out
 
-    items: List[Tuple[str, str, type]] = []
+    items: List[Tuple[str, str, str, type]] = []
     for cls in all_subclasses(IndicatorBase):
         slug = getattr(cls, "slug", None)
         if not slug:
@@ -148,11 +191,13 @@ def _collect_indicator_classes(debug: bool = False) -> List[Tuple[str, str, type
         slug = str(slug).lower().strip()
         mod = getattr(cls, "__module__", "") or ""
         category = (getattr(cls, "category", None) or _derive_category_from_module(mod) or "").strip()
-        items.append((slug, category, cls))
+        ind_type = _indicator_type_to_str(getattr(cls, "indicator_type", None), IndicatorTypeEnum)
+        items.append((slug, category, ind_type, cls))
 
-    dedup: Dict[str, Tuple[str, type]] = {}
-    for slug, cat, cls in items:
-        dedup[slug] = (cat, cls)
+    # Dedup by slug (last import wins)
+    dedup: Dict[str, Tuple[str, str, type]] = {}
+    for slug, cat, tstr, cls in items:
+        dedup[slug] = (cat, tstr, cls)
 
     if debug:
         print(f"[i list] Imported modules: {len(imported)}")
@@ -160,11 +205,12 @@ def _collect_indicator_classes(debug: bool = False) -> List[Tuple[str, str, type
             print(f"  - {name}")
         print(f"[i list] Discovered indicators: {len(dedup)}")
 
-    return [(slug, dedup[slug][0], dedup[slug][1]) for slug in sorted(dedup.keys())]
+    # Return sorted by slug
+    return [(slug, dedup[slug][0], dedup[slug][1], dedup[slug][2]) for slug in sorted(dedup.keys())]
 
 def _resolve_indicator_class(slug: str) -> Optional[type]:
     slug = (slug or "").lower().strip()
-    for s, _cat, cls in _collect_indicator_classes(debug=False):
+    for s, _cat, _typ, cls in _collect_indicator_classes(debug=False):
         if s == slug:
             return cls
     return None
@@ -279,8 +325,10 @@ class Indicator(Command):
                 slug = spec.get("slug", "")
                 name = spec.get("name", slug.upper())
                 params = spec.get("params", {})
-                rows.append([idx, slug, name, params])
-            _print_table(["#", "slug", "name", "params"], rows)
+                ind_cls = _resolve_indicator_class(slug)
+                ind_type = _indicator_type_to_str(getattr(ind_cls, "indicator_type", None)) if ind_cls else ""
+                rows.append([idx, slug, name, ind_type, params])
+            _print_table(["#", "slug", "name", "type", "params"], rows)
             try:
                 cols = getattr(state, "indicator_cols", None)
                 if cols:
@@ -299,22 +347,24 @@ class Indicator(Command):
 
             items = _collect_indicator_classes(debug=debug)
             if category_filter:
-                items = [(slug, cat, cls) for (slug, cat, cls) in items if cat.lower() == category_filter]
+                items = [(slug, cat, typ, cls) for (slug, cat, typ, cls) in items if cat.lower() == category_filter]
 
             if not items:
                 msg = "No indicators discovered"
                 if category_filter:
                     msg += f" in category '{category_filter}'"
-                msg += ". Ensure:\n- 'core/indicators' and each subfolder (trend, momentum, etc.) has an __init__.py\n- You're running from the project root so 'core' is on PYTHONPATH\n- Required libs (e.g. pandas) are installed"
+                msg += ". Ensure:\n- 'core/indicators' and each subfolder (trend, momentum, etc.) has an __init__.py\n" \
+                       "- You're running from the project root so 'core' is on PYTHONPATH\n" \
+                       "- Required libs (e.g. pandas) are installed"
                 print(msg)
                 return
 
             rows = []
-            for slug, cat, cls in items:
+            for slug, cat, typ, cls in items:
                 name = getattr(cls, "name", slug.upper()) or slug.upper()
                 sig = _format_params_signature(cls)
-                rows.append((slug, name, cat, sig))
-            _print_table(["slug", "name", "category", "params"], [[s, n, c, sig] for s, n, c, sig in rows])
+                rows.append((slug, name, cat, typ, sig))
+            _print_table(["slug", "name", "category", "type", "params"], [[s, n, c, t, sig] for s, n, c, t, sig in rows])
             return
 
         # ---- Remove ALL indicators ----
@@ -357,7 +407,6 @@ class Indicator(Command):
                     print(f"No indicator with slug '{slug}' found. Use 'i current' to see slugs.")
                 else:
                     if remove_all:
-                        # remove from the end to keep indices valid
                         for i in reversed(matches):
                             state.indicators.pop(i)
                             removed += 1
@@ -373,7 +422,6 @@ class Indicator(Command):
             return
 
         # ---- Add an indicator ----
-        # Everything else is treated as an add spec
         spec_str = " ".join(args).strip()
         try:
             spec = parse_indicator_token(spec_str)
@@ -382,3 +430,21 @@ class Indicator(Command):
             print(f"Indicator added: {spec['name']} -> {spec['params']}")
         except Exception as e:
             print(f"Indicator parse error: {e}")
+
+
+from ....registry import Command as _BaseCommand  # reuse the same base
+
+class IndicatorList(_BaseCommand):
+    name = "il"
+    aliases = []        # add more if you like, e.g. ["ilist"]
+    mode = "chart"
+    help = "Alias for 'indicator list'. Usage: il [category] [--debug]"
+
+    def run(self, args, state):
+        # forward to Indicator command with "list" subcommand
+        try:
+            Indicator().run(["list", *args], state)
+        except NameError:
+            # If this class lives in a separate file (il.py), import Indicator from sibling module
+            from .indicator import Indicator as _Indicator
+            _Indicator().run(["list", *args], state)

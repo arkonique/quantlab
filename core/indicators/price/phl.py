@@ -74,7 +74,7 @@ class PHL(Indicator):
             if l_left.size and l_right.size and np.all(l[i] < l_left) and np.all(l[i] < l_right):
                 pl[i] = l[i]
 
-        out = pd.DataFrame({"ph": ph, "pl": pl}, index=df.index)
+        out = pd.DataFrame({"high": ph, "low": pl}, index=df.index)
 
         # Apply min_periods: avoid emitting near edges
         if self.min_periods and self.min_periods > 0:

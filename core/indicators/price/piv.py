@@ -33,7 +33,7 @@ class PIV(Indicator):
     def __init__(
         self,
         method: str = "classic",
-        freq: str = "D",             # pandas offset alias: 'D','W','M', etc.
+        freq: str = "W",             # pandas offset alias: 'D','W','M', etc.
         high_col: str = "high",
         low_col: str = "low",
         close_col: str = "close",
