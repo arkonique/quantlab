@@ -1,6 +1,6 @@
 # QuantLab: A Research Environment for Quantitative Trading Strategies (WIP)
 
-## This project is very early in its development (I am literally the only developer right now) so please be patient as I build out the functionality.
+### This project is very early in its development (I am literally the only developer right now) so please be patient as I build out the functionality.
 ### I plan to make this open source and welcome contributions from the community.
 ### I will spend time writing documentation and tests as I build out the functionality. Right now I am focused on getting the core functionality working.
 ### If you have any questions or suggestions, please feel free to open an issue or contact me directly at _riddhi dot mandal at mail dot utoronto dot ca_

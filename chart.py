@@ -45,6 +45,19 @@ def _primary_period_like(params: Dict[str, Any]):
             return k, params[k]
     return None, None
 
+
+def _friendly_base_name(indicator, params: dict) -> str:
+    """
+    Build a human-friendly base label for Series/DF outputs, like:
+      'Bollinger Bands(20)' or 'Kaufman Adaptive Moving Average'
+    """
+    name = getattr(indicator, "name", None) or getattr(indicator, "slug", None) or indicator.__class__.__name__
+    # pick a primary period-like param if present
+    for key in ("window", "period", "length", "er_window"):
+        if key in params and params[key] is not None:
+            return f"{name}({params[key]})"
+    return name
+
 def _compact_param_sig(params: Dict[str, Any], max_items: int = 3) -> str | None:
     if not params:
         return None
@@ -81,6 +94,17 @@ def _choose_colname(slug: str, result: pd.Series | pd.DataFrame, name: str | Non
     return f"ind_{slug}"
 
 def add_indicator_columns(df: pd.DataFrame, indicators: List[IndicatorSpec]) -> tuple[pd.DataFrame, list[str]]:
+    """
+    Apply indicators and append their outputs to the DataFrame using a
+    human-friendly naming scheme:
+
+      - Series   -> '<FriendlyName(params)>'
+      - DataFrame-> '<FriendlyName(params)>.{subcol}'
+
+    Example:
+      'Bollinger Bands(20).mid', 'Bollinger Bands(20).upper', 'Bollinger Bands(20).lower'
+      'Kaufman Adaptive Moving Average'
+    """
     df = df.copy()
     added_cols: list[str] = []
 
@@ -89,21 +113,39 @@ def add_indicator_columns(df: pd.DataFrame, indicators: List[IndicatorSpec]) -> 
         _ensure_required_columns(df, inst.required_columns(), slug)
         result = inst.compute(df)
 
+        # Build the friendly base label once per indicator
+        base = _friendly_base_name(inst, params)
+
         if isinstance(result, pd.Series):
-            colname = _choose_colname(slug, result, name, params)
-            df[colname] = result.reindex(df.index)
-            added_cols.append(colname)
+            # Force a friendly display name regardless of the Series' internal .name
+            s = result.reindex(df.index).copy()
+            s.name = base
+            df[s.name] = s
+            added_cols.append(s.name)
 
         elif isinstance(result, pd.DataFrame):
-            base = _choose_colname(slug, result, name, params) or f"ind_{slug}"
-            for c in result.columns:
-                colname = f"{base}.{c}"
-                df[colname] = result[c].reindex(df.index)
-                added_cols.append(colname)
+            # Normalize to df index and rename subcolumns under the friendly base
+            out = result.reindex(df.index).copy()
+
+            # In case any subcolumn already includes a prefix like 'BOL.mid',
+            # keep only the last token to avoid 'Base.BOL.mid' double-prefixing.
+            def _subkey(col: str) -> str:
+                try:
+                    return str(col).split(".")[-1]
+                except Exception:
+                    return str(col)
+
+            renamed_cols = {c: f"{base}.{_subkey(c)}" for c in out.columns}
+            out = out.rename(columns=renamed_cols)
+
+            for c in out.columns:
+                df[c] = out[c]
+                added_cols.append(c)
         else:
             warnings.warn(f"Indicator '{slug}' returned {type(result)}, not added as a column.")
 
     return df, added_cols
+
 
 dotenv.load_dotenv()
 
@@ -280,84 +322,6 @@ def load_duration_data(
 
     return df
 
-
-def plot_candlestick_chart(df: pd.DataFrame,
-                           ticker: str,
-                           filename: str,
-                           indicators: List[IndicatorSpec] | None = None):
-    """
-    Plot OHLC candles + optional indicators.
-
-    indicators: list of specs, each can be one of:
-      - "sma"
-      - Indicator instance (e.g., Indicator.create("sma", window=20))
-      - {"slug": "sma", "params": {"window": 20, "column": "close"}, "name": "SMA(20)"}
-    """
-    # Base candlestick
-    fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=df.index,
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name="OHLC"
-            )
-        ]
-    )
-    fig.update_layout(
-        title=f'Candlestick chart for {ticker}',
-        xaxis_title='Date',
-        yaxis_title='Price',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-    )
-
-    # Early exit if no indicators requested
-    if not indicators:
-        fig.write_html(filename)
-        return
-
-    # Add indicators
-    for spec in indicators:
-        slug, inst, name, _ = _build_indicator(spec)
-
-        # Validate required columns
-        _ensure_required_columns(df, inst.required_columns(), slug)
-
-        # Compute the indicator
-        result = inst.compute(df)
-
-        # Route by indicator type (for now we implement LINE only)
-        itype = getattr(inst.__class__, "type", "line")  # string alias
-        # or: itype_enum = getattr(inst.__class__, "indicator_type", IndicatorType.LINE)
-
-        if itype == "line":
-            # Expect a pd.Series aligned to df.index
-            if isinstance(result, pd.DataFrame):
-                # If a DataFrame was returned, try to pick a sensible column
-                series = result.iloc[:, 0]
-                warnings.warn(f"Indicator '{slug}' returned a DataFrame; using first column '{result.columns[0]}' for line plot.")
-            else:
-                series = result
-
-            # Align index & drop NaNs at the front to avoid gaps
-            series = series.reindex(df.index).astype(float)
-
-            fig.add_trace(
-                go.Scatter(
-                    x=series.index,
-                    y=series.values,
-                    mode="lines",
-                    name=name
-                )
-            )
-
-        else:
-            # Future: add LEVELS/BANDS/MARKERS rendering here
-            warnings.warn(f"Indicator '{slug}' has type '{itype}', which is not yet implemented in plotting.")
-
-    fig.write_html(filename)
 
 def plot_candlestick_chart(
     df, ticker, filename, indicator_cols=None, theme="plotly_dark",
