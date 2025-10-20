@@ -6,11 +6,11 @@ import pandas as pd
 import requests
 import plotly.graph_objects as go
 import plotly.express as px
-from core.indicators import discover_all, discover_category
 from typing import Any, Dict, Iterable, List, Union
 import warnings
-from core.indicators.base import Indicator, IndicatorType
 from dataclasses import dataclass
+from core.indicators import discover_all, discover_category
+from core.indicators.base import Indicator, IndicatorType
 
 @dataclass
 class IndicatorRenderSpec:

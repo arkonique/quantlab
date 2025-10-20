@@ -11,6 +11,7 @@ class IndicatorType(str, Enum):
     LEVELS  = "levels"    # horizontal levels/zones (Fibo, pivots, S/R)
     MARKERS = "markers"   # discrete points/arrows (fractals, swing highs)
     SIGNAL  = "signal"    # boolean/ternary signals (buy/sell/hold)
+    HISTO   = "histo"     # histogram bars (MACD, volume)
     TABLE   = "table"     # tabular stats (roll stats, factor exposures)
 
 class Indicator(ABC):
