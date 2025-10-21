@@ -11,6 +11,8 @@ import warnings
 from dataclasses import dataclass
 from core.indicators import discover_all, discover_category
 from core.indicators.base import Indicator, IndicatorType
+from collections import defaultdict
+from plotly.subplots import make_subplots
 
 @dataclass
 class IndicatorRenderSpec:
@@ -18,6 +20,7 @@ class IndicatorRenderSpec:
     base: str                             # friendly base name, e.g., "Bollinger Bands(20)"
     columns: list[str]                    # the df columns created for this indicator
     indicator_type: IndicatorType | None  # from the class (LINE/BANDS/LEVELS/etc.)
+    plot_row: int | None                   # the subplot row index (if applicable)
 
 IndicatorSpec = Union[
     str,                              # "sma"
@@ -157,7 +160,8 @@ def add_indicator_columns(
             indicator=inst,
             base=base,
             columns=produced,
-            indicator_type=getattr(inst, "indicator_type", None)
+            indicator_type=getattr(inst, "indicator_type", None),
+            plot_row=getattr(inst, "plot_row", None)
         ))
 
     return df, added_cols, render_specs
@@ -375,103 +379,185 @@ def _marker_style_for_suffix(suffix: str) -> dict:
     return {"symbol": "circle", "color": "#94a3b8", "label": s or "marker", "size": 8}
 
 
+
 def plot_candlestick_chart(
     df,
     ticker,
     filename,
-    indicator_cols: list[str] | None = None,         # legacy path
-    indicator_specs: list[IndicatorRenderSpec] | None = None,  # new path
+    indicator_cols: list[str] | None = None,
+    indicator_specs: list[IndicatorRenderSpec] | None = None,
     theme: str = "plotly_dark",
     connect_line: bool = True,
     line_column: str = "close",
 ):
     x_vals = pd.to_datetime(df.index).strftime("%Y-%m-%d %H:%M:%S")
-    fig = go.Figure()
     
-    # Add candlestick trace
-    fig.add_trace(go.Candlestick(
-        x=x_vals, 
-        open=df["open"], 
-        high=df["high"], 
-        low=df["low"], 
-        close=df["close"], 
+    # Group indicators by plot_row
+    row_indicators = defaultdict(list)
+    
+    if indicator_specs:
+        for spec in indicator_specs:
+            plot_row = getattr(spec, 'plot_row', 0)  # Default to 0 (main chart)
+            print(f"Indicator '{spec.base}' assigned to plot row {plot_row}.")
+            row_indicators[plot_row].append(spec)
+    
+    # Normalize row numbers to remove gaps
+    # e.g., if we have rows [0, 3, 5], map them to [0, 1, 2]
+    unique_rows = sorted(row_indicators.keys())
+    row_mapping = {old_row: new_row for new_row, old_row in enumerate(unique_rows)}
+    
+    # Reorganize with normalized row numbers
+    normalized_row_indicators = {}
+    for old_row, specs in row_indicators.items():
+        new_row = row_mapping[old_row]
+        normalized_row_indicators[new_row] = specs
+    
+    # Calculate number of actual rows needed
+    total_rows = len(unique_rows) if unique_rows else 1
+    num_subplots = total_rows - 1  # Excluding main chart (row 0)
+    
+    # Create figure with subplots if needed
+    if num_subplots > 0:
+        # Calculate row heights - main chart gets more space
+        if total_rows == 2:
+            row_heights = [0.7, 0.3]
+        elif total_rows == 3:
+            row_heights = [0.6, 0.2, 0.2]
+        else:
+            # First row gets 60%, others share remaining 40%
+            row_heights = [0.6] + [0.4 / num_subplots] * num_subplots
+        
+        # Create subplot titles
+        subplot_titles = ["Price"]
+        for row_num in range(1, total_rows):
+            # Get names of indicators in this row
+            specs_in_row = normalized_row_indicators.get(row_num, [])
+            if specs_in_row:
+                names = [spec.base for spec in specs_in_row[:2]]  # Show first 2 names
+                if len(specs_in_row) > 2:
+                    names.append("...")
+                subplot_titles.append(" / ".join(names))
+            else:
+                subplot_titles.append(f"Row {row_num}")
+        
+        fig = make_subplots(
+            rows=total_rows,
+            cols=1,
+            shared_xaxes=True,  # This enables synchronized zooming!
+            vertical_spacing=0.03,
+            row_heights=row_heights,
+            subplot_titles=subplot_titles,
+            specs=[[{"secondary_y": False}]] * total_rows
+        )
+    else:
+        fig = go.Figure()
+    
+    # Add candlestick trace (always on row 1)
+    candlestick = go.Candlestick(
+        x=x_vals,
+        open=df["open"],
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
         name="OHLC"
-    ))
+    )
+    
+    if num_subplots > 0:
+        fig.add_trace(candlestick, row=1, col=1)
+    else:
+        fig.add_trace(candlestick)
 
     # Add connecting line if requested
     if connect_line and line_column in df.columns:
-        fig.add_trace(go.Scatter(
-            x=x_vals, 
-            y=df[line_column], 
+        line_trace = go.Scatter(
+            x=x_vals,
+            y=df[line_column],
             mode="lines",
             name=f"{line_column.capitalize()} (connect)",
-            line=dict(width=1, dash="dot"), 
+            line=dict(width=1, dash="dot"),
             hoverinfo="skip",
             connectgaps=False,
-        ))
+        )
+        if num_subplots > 0:
+            fig.add_trace(line_trace, row=1, col=1)
+        else:
+            fig.add_trace(line_trace)
 
-    # --- Render indicators by specification ---
-    if indicator_specs:
-        for spec in indicator_specs:
-            itype = spec.indicator_type
-            cols = [c for c in spec.columns if c in df.columns]
+    # Render all indicators in their assigned rows
+    for row_num, specs in normalized_row_indicators.items():
+        for spec in specs:
+            # Convert 0-based row to 1-based for plotly (row 0 -> row 1)
+            plotly_row = row_num + 1 if num_subplots > 0 else None
+            _render_indicator(fig, df, x_vals, spec, row=plotly_row)
 
-            # BANDS (e.g., Bollinger upper/lower, fill between)
-            if itype == IndicatorType.BANDS:
-                _render_bands(fig, df, x_vals, cols)
-
-            # LEVELS (horizontal levels / zones)
-            elif itype == IndicatorType.LEVELS:
-                _render_levels(fig, df, x_vals, cols)
-
-            # MARKERS (event points)
-            elif itype == IndicatorType.MARKERS:
-                _render_markers(fig, df, x_vals, cols, spec)
-
-            # HISTOGRAM (bar charts)
-            elif itype == IndicatorType.HISTOGRAM:
-                _render_histogram(fig, df, x_vals, cols, spec)
-
-            # TABLE/SIGNAL or default LINE -> line series per column
-            else:
-                _render_lines(fig, df, x_vals, cols)
-
-    # --- Legacy: flat column list still works ---
-    elif indicator_cols:
+    # Legacy: flat column list still works (goes to main chart)
+    if indicator_cols and not indicator_specs:
         for col in indicator_cols:
             if col in df.columns:
-                fig.add_trace(go.Scatter(
-                    x=x_vals, 
-                    y=df[col], 
-                    mode="lines", 
-                    name=col, 
+                trace = go.Scatter(
+                    x=x_vals,
+                    y=df[col],
+                    mode="lines",
+                    name=col,
                     connectgaps=False
-                ))
+                )
+                if num_subplots > 0:
+                    fig.add_trace(trace, row=1, col=1)
+                else:
+                    fig.add_trace(trace)
 
     # Update layout
-    fig.update_layout(
+    layout_updates = dict(
         template=theme,
         title=dict(
-            text=f"Candlestick Chart for {ticker}", 
-            x=0.5, 
-            xanchor="center", 
-            yanchor="top", 
+            text=f"Candlestick Chart for {ticker}",
+            x=0.5,
+            xanchor="center",
+            yanchor="top",
             pad=dict(t=15, b=10)
         ),
-        xaxis_title="Date",
-        yaxis_title="Price",
         xaxis_rangeslider_visible=False,
         margin=dict(l=50, r=30, t=80, b=50),
         legend=dict(
-            orientation="h", 
-            yanchor="bottom", 
-            y=1.08, 
-            xanchor="center", 
-            x=0.5, 
+            orientation="h",
+            yanchor="bottom",
+            y=1.08,
+            xanchor="center",
+            x=0.5,
             bgcolor="rgba(0,0,0,0)" if "dark" in theme else "rgba(255,255,255,0)"
         ),
         hovermode="x unified",
     )
+    
+    # Update axes labels
+    if num_subplots > 0:
+        # Update x-axis label only on bottom subplot
+        layout_updates[f"xaxis{total_rows}_title"] = "Date"
+        # Update y-axis labels
+        layout_updates["yaxis_title"] = "Price"
+        
+        # Add y-axis titles for other subplots based on indicator types
+        for row_num in range(1, total_rows):
+            specs_in_row = normalized_row_indicators.get(row_num, [])
+            if specs_in_row:
+                # Use the first indicator's name or a generic label
+                first_spec = specs_in_row[0]
+                if hasattr(first_spec, 'y_label'):
+                    ylabel = first_spec.y_label
+                elif first_spec.indicator_type == IndicatorType.HISTOGRAM:
+                    ylabel = "Value"
+                else:
+                    ylabel = first_spec.base
+                layout_updates[f"yaxis{row_num + 1}_title"] = ylabel
+    else:
+        layout_updates["xaxis_title"] = "Date"
+        layout_updates["yaxis_title"] = "Price"
+    
+    fig.update_layout(**layout_updates)
+    
+    # Print row mapping info if gaps were detected
+    if len(row_mapping) > 1 and max(row_mapping.keys()) != len(row_mapping) - 1:
+        print(f"Row mapping adjusted: {dict(row_mapping)}")
 
     # Save to file
     if filename.endswith((".html", ".htm")):
@@ -486,141 +572,189 @@ def plot_candlestick_chart(
         fig.write_image(filename, width=3840, height=2160, scale=1)
 
 
-# --- Helper functions for each indicator type ---
+# --- Helper function to route indicator rendering ---
 
-def _render_bands(fig, df, x_vals, cols):
+def _render_indicator(fig, df, x_vals, spec, row=None):
+    """Route indicator rendering based on type."""
+    itype = spec.indicator_type
+    cols = [c for c in spec.columns if c in df.columns]
+    
+    if itype == IndicatorType.BANDS:
+        _render_bands(fig, df, x_vals, cols, row)
+    elif itype == IndicatorType.LEVELS:
+        _render_levels(fig, df, x_vals, cols, row)
+    elif itype == IndicatorType.MARKERS:
+        _render_markers(fig, df, x_vals, cols, spec, row)
+    elif itype == IndicatorType.HISTOGRAM:
+        _render_histogram(fig, df, x_vals, cols, spec, row)
+    else:
+        _render_lines(fig, df, x_vals, cols, row)
+
+
+# --- Updated helper functions remain the same as before ---
+
+def _render_bands(fig, df, x_vals, cols, row=None):
     """Render band indicators with fill between upper and lower."""
     upper = next((c for c in cols if c.endswith(".upper")), None)
     lower = next((c for c in cols if c.endswith(".lower")), None)
-    mid   = next((c for c in cols if c.endswith(".mid")),   None)
+    mid = next((c for c in cols if c.endswith(".mid")), None)
 
-    # Fallback: if no canonical names, just draw all as separate lines
+    kwargs = {} if row is None else {"row": row, "col": 1}
+
     if not (upper and lower):
         for c in cols:
-            fig.add_trace(go.Scatter(
-                x=x_vals, 
-                y=df[c], 
-                mode="lines", 
-                name=c, 
-                connectgaps=False
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=x_vals,
+                    y=df[c],
+                    mode="lines",
+                    name=c,
+                    connectgaps=False
+                ),
+                **kwargs
+            )
     else:
-        # Draw lower first
-        fig.add_trace(go.Scatter(
-            x=x_vals, 
-            y=df[lower], 
-            mode="lines",
-            name=lower, 
-            connectgaps=False
-        ))
-        # Then upper, filled to previous
-        fig.add_trace(go.Scatter(
-            x=x_vals, 
-            y=df[upper], 
-            mode="lines",
-            name=upper, 
-            fill="tonexty", 
-            opacity=0.2, 
-            connectgaps=False
-        ))
-        # Optional middle line
-        if mid and mid in df.columns:
-            fig.add_trace(go.Scatter(
-                x=x_vals, 
-                y=df[mid], 
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=df[lower],
                 mode="lines",
-                name=mid, 
-                line=dict(width=2, dash="dash"), 
+                name=lower,
                 connectgaps=False
-            ))
+            ),
+            **kwargs
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=df[upper],
+                mode="lines",
+                name=upper,
+                fill="tonexty",
+                opacity=0.2,
+                connectgaps=False
+            ),
+            **kwargs
+        )
+        if mid and mid in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=x_vals,
+                    y=df[mid],
+                    mode="lines",
+                    name=mid,
+                    line=dict(width=2, dash="dash"),
+                    connectgaps=False
+                ),
+                **kwargs
+            )
 
 
-def _render_levels(fig, df, x_vals, cols):
+def _render_levels(fig, df, x_vals, cols, row=None):
     """Render horizontal level indicators."""
+    kwargs = {} if row is None else {"row": row, "col": 1}
+    
     for c in cols:
-        s = df[c].astype(float)                    # ensure float (NaN-friendly)
+        s = df[c].astype(float)
         valid = s.notna()
-        changes = s.ne(s.shift()) | ~valid         # indices where value changes or is invalid
-        y = s.mask(changes)                        # set change points to NaN -> breaks the line
+        changes = s.ne(s.shift()) | ~valid
+        y = s.mask(changes)
 
-        fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=y,
-            mode="lines",
-            name=c,
-            line=dict(width=1),
-            connectgaps=False,
-            line_shape="hv",
-            hoverinfo="skip"
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=y,
+                mode="lines",
+                name=c,
+                line=dict(width=1),
+                connectgaps=False,
+                line_shape="hv",
+                hoverinfo="skip"
+            ),
+            **kwargs
+        )
 
 
-def _render_markers(fig, df, x_vals, cols, spec):
+def _render_markers(fig, df, x_vals, cols, spec, row=None):
     """Render marker indicators for discrete events."""
+    kwargs = {} if row is None else {"row": row, "col": 1}
+    
     for c in cols:
         suffix = c.split(".")[-1] if "." in c else c
         style = _marker_style_for_suffix(suffix)
 
-        fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=df[c],
-            mode="markers",
-            name=f"{spec.base} · {style['label']}",
-            marker=dict(
-                symbol=style["symbol"],
-                size=style["size"],
-                color=style["color"],
-                line=dict(width=0)
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=df[c],
+                mode="markers",
+                name=f"{spec.base} · {style['label']}",
+                marker=dict(
+                    symbol=style["symbol"],
+                    size=style["size"],
+                    color=style["color"],
+                    line=dict(width=0)
+                ),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Time: %{x}<br>"
+                    "Price: %{y:.4f}<extra></extra>"
+                ),
+                text=[f"{spec.base} · {style['label']}"] * len(df),
             ),
-            hovertemplate=(
-                "<b>%{text}</b><br>"
-                "Time: %{x}<br>"
-                "Price: %{y:.4f}<extra></extra>"
-            ),
-            text=[f"{spec.base} · {style['label']}"] * len(df),
-        ))
+            **kwargs
+        )
 
 
-def _render_histogram(fig, df, x_vals, cols, spec):
+def _render_histogram(fig, df, x_vals, cols, spec, row=None):
     """Render histogram indicators as bar charts."""
+    kwargs = {} if row is None else {"row": row, "col": 1}
+    
     for c in cols:
         values = df[c]
         
-        # Determine bar colors based on positive/negative values
         colors = [
-            'rgba(0, 204, 150, 0.6)' if v > 0 else 'rgba(255, 82, 82, 0.6)' 
+            'rgba(0, 204, 150, 0.6)' if v > 0 else 'rgba(255, 82, 82, 0.6)'
             if v < 0 else 'rgba(128, 128, 128, 0.3)'
             for v in values
         ]
         
-        fig.add_trace(go.Bar(
-            x=x_vals,
-            y=values,
-            name=c,
-            marker=dict(
-                color=colors,
-                line=dict(width=0)
+        fig.add_trace(
+            go.Bar(
+                x=x_vals,
+                y=values,
+                name=c,
+                marker=dict(
+                    color=colors,
+                    line=dict(width=0)
+                ),
+                hovertemplate=(
+                    "<b>%{fullData.name}</b><br>"
+                    "Time: %{x}<br>"
+                    "Value: %{y:.4f}<extra></extra>"
+                ),
+                opacity=0.7,
             ),
-            hovertemplate=(
-                "<b>%{fullData.name}</b><br>"
-                "Time: %{x}<br>"
-                "Value: %{y:.4f}<extra></extra>"
-            ),
-            opacity=0.7,
-            yaxis="y2" if hasattr(spec, 'separate_axis') and spec.separate_axis else "y"
-        ))
+            **kwargs
+        )
 
 
-def _render_lines(fig, df, x_vals, cols):
+def _render_lines(fig, df, x_vals, cols, row=None):
     """Render standard line indicators."""
+    kwargs = {} if row is None else {"row": row, "col": 1}
+    
     for c in cols:
-        fig.add_trace(go.Scatter(
-            x=x_vals, 
-            y=df[c], 
-            mode="lines", 
-            name=c, 
-            connectgaps=False
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=df[c],
+                mode="lines",
+                name=c,
+                connectgaps=False
+            ),
+            **kwargs
+        )
+
 
 # Example usage:
 if __name__ == "__main__":
