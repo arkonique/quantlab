@@ -3,14 +3,15 @@ import pandas as pd
 import numpy as np
 
 
-class MACD(Indicator):
+class MACH(Indicator):
     """
-    Moving Average Convergence/Divergence (MACD)
-
-    Standard (EMA-based):
-        macd   = EMA(fast) - EMA(slow)
-        signal = EMA(macd, signal_window)
-
+    MACD Histogram
+    
+    The histogram represents the difference between MACD line and signal line:
+        hist = MACD - Signal
+        where MACD = EMA(fast) - EMA(slow)
+        and Signal = EMA(MACD, signal_window)
+    
     Params:
         fast_window  (int): fast EMA length (default 12)
         slow_window  (int): slow EMA length (default 26)
@@ -18,14 +19,14 @@ class MACD(Indicator):
         column       (str): source column (default 'close')
         adjust       (bool): passed to pandas ewm(); False = recursive weighting
         min_periods  (int|None): default = slow_window (starts when slow EMA valid)
-
+    
     Returns:
-        pd.DataFrame with columns: 'macd', 'signal'
+        pd.DataFrame with column: 'hist'
     """
     category = "momentum"
-    slug = "macd"
-    name = "MACD"
-    indicator_type = IndicatorType.LINE
+    slug = "mach"
+    name = "MACD Histogram"
+    indicator_type = IndicatorType.HISTOGRAM
 
     def __init__(
         self,
@@ -39,7 +40,6 @@ class MACD(Indicator):
         if fast_window <= 0 or slow_window <= 0 or signal_window <= 0:
             raise ValueError("All MACD windows must be > 0")
         if fast_window >= slow_window:
-            # Traditional MACD expects fast < slow
             raise ValueError("fast_window must be < slow_window")
 
         self.fast_window = int(fast_window)
@@ -65,9 +65,10 @@ class MACD(Indicator):
 
         macd_line = ema_fast - ema_slow
         signal = self._ema(macd_line, self.signal_window, self.signal_window)
+        hist = macd_line - signal
 
         out = pd.DataFrame(
-            {"macd": macd_line, "signal": signal},
+            {"hist": hist},
             index=df.index,
         )
 
