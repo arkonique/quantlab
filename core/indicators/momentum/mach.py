@@ -27,6 +27,7 @@ class MACH(Indicator):
     slug = "mach"
     name = "MACD Histogram"
     indicator_type = IndicatorType.HISTOGRAM
+    plot_row = 1  # typically plotted below price
 
     def __init__(
         self,

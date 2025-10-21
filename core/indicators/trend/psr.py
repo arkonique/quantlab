@@ -26,6 +26,7 @@ class PSR(Indicator):
     slug = "psr"
     name = "Parabolic SAR"
     indicator_type = IndicatorType.LINE
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

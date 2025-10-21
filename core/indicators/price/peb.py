@@ -26,6 +26,7 @@ class PEB(Indicator):
     slug = "peb"
     name = "Percentage Bands"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

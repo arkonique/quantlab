@@ -27,6 +27,7 @@ class ALMA(Indicator):
     slug = "alma"
     name = "Arnaud Legoux Moving Average"
     indicator_type = IndicatorType.LINE
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

@@ -21,6 +21,7 @@ class ATB(Indicator):
     slug = "atb"
     name = "ATR Bands"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

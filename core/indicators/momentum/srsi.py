@@ -20,6 +20,7 @@ class SRSI(Indicator):
     slug = "srsi"
     name = "Stochastic RSI"
     indicator_type = IndicatorType.LINE
+    plot_row = 1  # typically plotted below price
 
     def __init__(
         self,

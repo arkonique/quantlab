@@ -26,6 +26,7 @@ class BOL(Indicator):
     slug = "bol"
     name = "Bollinger Bands"
     indicator_type = IndicatorType.BANDS  # plural
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

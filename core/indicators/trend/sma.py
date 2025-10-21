@@ -7,6 +7,7 @@ class SMA(Indicator):
     slug = "sma"
     name = "Simple Moving Average"
     indicator_type = IndicatorType.LINE  # exposes .type = "line"
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(self, window: int = 20, column: str = "close"):
         self.window = int(window)

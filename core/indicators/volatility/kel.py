@@ -20,6 +20,7 @@ class KEL(Indicator):
     slug = "kel"
     name = "Keltner Channels"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

@@ -22,6 +22,7 @@ class PHL(Indicator):
     slug = "phl"
     name = "Pivot High-Low"
     indicator_type = IndicatorType.MARKERS  # discrete swing markers
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

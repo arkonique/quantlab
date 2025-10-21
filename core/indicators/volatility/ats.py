@@ -32,6 +32,7 @@ class ATS(Indicator):
     slug = "ats"
     name = "ATR Trailing Stops"
     indicator_type = IndicatorType.LINE
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

@@ -29,6 +29,7 @@ class PIV(Indicator):
     slug = "piv"
     name = "Pivot Points"
     indicator_type = IndicatorType.LEVELS  # horizontal levels/zones
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

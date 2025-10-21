@@ -20,6 +20,7 @@ class PEV(Indicator):
     slug = "pev"
     name = "Price Envelope"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

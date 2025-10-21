@@ -21,6 +21,7 @@ class LRC(Indicator):
     slug = "lrc"
     name = "Linear Regression Channel"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

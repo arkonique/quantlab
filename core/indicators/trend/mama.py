@@ -27,6 +27,7 @@ class MAMA(Indicator):
     slug = "mama"           # 4-char slug, as requested
     name = "MESA Adaptive Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as lines
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

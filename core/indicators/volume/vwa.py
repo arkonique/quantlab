@@ -20,6 +20,7 @@ class VWA(Indicator):
     slug = "vwa"
     name = "Volume Weighted Average Price"
     indicator_type = IndicatorType.LINE
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

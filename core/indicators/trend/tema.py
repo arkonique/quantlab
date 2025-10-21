@@ -21,6 +21,7 @@ class TEMA(Indicator):
     slug = "tema"
     name = "Triple Exponential Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as a line
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

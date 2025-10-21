@@ -20,6 +20,7 @@ class KAMA(Indicator):
     slug = "kama"
     name = "Kaufman Adaptive Moving Average"
     indicator_type = IndicatorType.LINE
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

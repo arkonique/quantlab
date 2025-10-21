@@ -26,6 +26,7 @@ class GMMA(Indicator):
     slug = "gmma"
     name = "Guppy Multiple Moving Average"
     indicator_type = IndicatorType.LINE  # multiple line series
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,

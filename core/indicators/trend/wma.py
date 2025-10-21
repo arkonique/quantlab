@@ -8,6 +8,7 @@ class WMA(Indicator):
     slug = "wma"
     name = "Weighted Moving Average"
     indicator_type = IndicatorType.LINE  # plotted as a line
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(self, window: int = 20, column: str = "close"):
         """

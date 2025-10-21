@@ -20,6 +20,7 @@ class RSI(Indicator):
     slug = "rsi"
     name = "Relative Strength Index"
     indicator_type = IndicatorType.LINE  # plotted as a line
+    plot_row = 1  # typically plotted below price
 
     def __init__(
         self,

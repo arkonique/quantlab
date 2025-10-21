@@ -7,6 +7,7 @@ class EMA(Indicator):
     slug = "ema"
     name = "Exponential Moving Average"
     indicator_type = IndicatorType.LINE  # this will be plotted as a line
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(self, window: int = 20, column: str = "close", adjust: bool = False):
         """

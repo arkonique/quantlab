@@ -22,6 +22,7 @@ class SDC(Indicator):
     slug = "sdc"
     name = "Standard Deviation Channels"
     indicator_type = IndicatorType.BANDS
+    plot_row = 0  # typically plotted on price chart
 
     def __init__(
         self,
